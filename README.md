@@ -21,6 +21,7 @@ Parameters:
 
         use_dask (bool) – Whether to use Dask for processing large datasets. Default is False. Requires dask to be installed.
 
+Now, checking the GitHub repository more in depth, they have an examples folder where they share some use cases for this package. We'll use the one called "examples/01-madrid.ipynb" but applied to Valencia.
 
-
+References:
 Beneduce, C., Gullón Muñoz-Repiso, T., Lepri, B., & Luca, M. (2025). pySpainMobility: a Python Package to Access and Manage Spanish Open Mobility Data
