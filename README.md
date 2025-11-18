@@ -8,7 +8,7 @@
 ![DuckDB](https://img.shields.io/badge/DuckDB-OLAP-yellow)
 ![Status](https://img.shields.io/badge/Methodology-Agile-orange)
 
-## 📖 Overview
+## Overview
 
 This repository contains an end-to-end data analysis pipeline that correlates human mobility patterns in Spain with socio-economic data. Using **DuckDB** for high-performance in-process SQL and **MITMA** (Ministry of Transport) open data, this project constructs a Medallion Architecture (Bronze $\to$ Silver $\to$ Gold) to identify infrastructure gaps and mobility trends.
 
@@ -16,7 +16,7 @@ This document serves as a record of the technical decisions made during the deve
 
 ---
 
-## 🎯 Key Insights & Findings (Capa Gold)
+## Key Insights & Findings (Capa Gold)
 
 El análisis de la movilidad semanal (Noviembre 2023) reveló los siguientes patrones y deficiencias de infraestructura:
 
@@ -28,9 +28,9 @@ El análisis de la movilidad semanal (Noviembre 2023) reveló los siguientes pat
 
 ---
 
-## 🔄 Agile Development Log
+## Steps Followed
 
-### 1. Data Acquisition (Sprint 1)
+### 1. Data Acquisition
 **Challenge:** We initially located the data on the [MITMA Open Data portal](https://www.transportes.gob.es/ministerio/proyectos-singulares/estudios-de-movilidad-con-big-data/opendata-movilidad). However, manually downloading every monthly dataset was infeasible due to physical storage constraints and download times (approx. 5GB per file).
 
 **Solution:** We utilized the `pyspainmobility` Python package provided by the ministry to streamline extraction.
@@ -40,7 +40,7 @@ El análisis de la movilidad semanal (Noviembre 2023) reveló los siguientes pat
 * `zones` (str): Geographic granularity. Options: `districts`, `municipalities` (default), `large_urban_areas` (GAU).
 * `start_date` (str): Required format `YYYY-MM-DD`.
 
-### 2. Data Exploration (Sprint 2)
+### 2. Data Exploration
 **Strategy:** We analyzed the official [examples folder](https://github.com/pyspainmobility/pySpainMobility/tree/main/examples) from the repository. Specifically, we adapted the logic from `examples/01-madrid.ipynb` to apply it to the **Valencia** region.
 
 **Initial Finding:**
@@ -48,28 +48,28 @@ El análisis de la movilidad semanal (Noviembre 2023) reveló los siguientes pat
 
 ---
 
-## 🏗️ Data Pipeline Architecture
+## Data Pipeline Architecture
 
 The project is structured around a **DuckDB Medallion Architecture**:
 
-### 🥉 Bronze Layer (Raw Ingestion)
+### Bronze Layer (Raw Ingestion)
 * **Mobility Data:** Raw files for Distritos, Municipios, and GAUs.
 * **Socio-economic Data:** Raw ingestion of Population and Income from INE.
 * **Goal:** **Preserve the data exactly as the source provided.**
 
-### 🥈 Silver Layer (Cleaning & Integration)
+### Silver Layer (Cleaning & Integration)
 * **Consolidation:** Combines the three raw mobility sources, resolving data overlap (desduplicación).
 * **Enrichment:** Joins trip data with population, income, and temporal features (`day_of_week`).
 * **Goal:** **Provide a single, cleaned, and granular source of truth.**
 
-### 🥇 Gold Layer (Business Aggregates)
+### Gold Layer (Business Aggregates)
 * **Modeling:** Calculates the **Infrastructure Coverage Index** (KPI) using the Gravity Model.
 * **Strategic Aggregation:** Rolls up data to the Provincial level to measure macro-flows.
 * **Goal:** **Produce final, aggregated answers (KPIs) for the business.**
 
 ---
 
-## 🗃️ Repository Data Schema
+## Repository Data Schema
 
 | Capa | Nombre de la Tabla | Granularidad / Función | Campos Clave (Schema) |
 | :--- | :--- | :--- | :--- |
@@ -83,7 +83,7 @@ The project is structured around a **DuckDB Medallion Architecture**:
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 * **Language:** Python 3.x
 * **Query Engine:** [DuckDB](https://duckdb.org/) (In-process SQL OLAP)
@@ -91,7 +91,7 @@ The project is structured around a **DuckDB Medallion Architecture**:
 * **Data Manipulation:** Pandas
 * **Visualization:** Seaborn / Matplotlib
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 ```bash
