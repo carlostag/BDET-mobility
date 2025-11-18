@@ -16,6 +16,18 @@ This document serves as a record of the technical decisions made during the deve
 
 ---
 
+## 🎯 Key Insights & Findings (Capa Gold)
+
+El análisis de la movilidad semanal (Noviembre 2023) reveló los siguientes patrones y deficiencias de infraestructura:
+
+* **Deficiencia de Infraestructura (KPI)**: Las zonas con el **peor servicio de infraestructura** (menor `indice_cobertura`) son distritos de grandes ciudades y sus áreas metropolitanas. Esto indica que la demanda teórica de viajes supera ampliamente la capacidad de las rutas actuales.
+    * El `indice_cobertura` más bajo (cercano a **0.19**) se encuentra en distritos de **Hospitalet de Llobregat** y **Santa Coloma de Gramenet**, indicando que su infraestructura no absorbe el potencial de movilidad de su población.
+* **Movilidad Dominante:** Los trayectos más concurridos son abrumadoramente **internos** (intra-municipal), con los pares Madrid $\leftrightarrow$ Madrid y Barcelona $\leftrightarrow$ Barcelona registrando el volumen de viajes más alto.
+* **Flujos Inter-Metropolitanos:** Las rutas más fuertes entre grandes urbes (excluyendo viajes internos) son las que conectan **suburbios dormitorio** con el centro, como **Hospitalet de Llobregat $\leftrightarrow$ Barcelona** y **Getafe/Leganés $\leftrightarrow$ Madrid**.
+* **Aislamiento Geográfico:** Las provincias con la **menor conectividad** interprovincial (menor `viajes_totales` salientes/entrantes) son las ciudades autónomas de **Melilla** y **Ceuta**, principalmente con provincias peninsulares lejanas como **Guipúzcoa** o **Salamanca**.
+
+---
+
 ## 🔄 Agile Development Log
 
 ### 1. Data Acquisition (Sprint 1)
