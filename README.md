@@ -1,29 +1,75 @@
-# BDET-mobility
-Project for Big Data Engineering Technologies made by Julia García and Carlos Torregrosa.
+# BDET-mobility: Spanish Population Mobility Analysis
 
-This document will act as kind of a draft of the different decissions made simulating the sprints used in agile methodologies.
+**Project for Big Data Engineering Technologies**
+<br>
+**Authors:** Julia García & Carlos Torregrosa
 
-1. Data adquisition.
-We looked first for the data in the MITMA web, available in this link: https://www.transportes.gob.es/ministerio/proyectos-singulares/estudios-de-movilidad-con-big-data/opendata-movilidad
-We first noticed that was nearly impossible to manually download every monthly dataset in terms of physical space and downloading time as each one had a weight of 5GB, so we observed the ministry offered a python package accesible called pyspainmobility. From their package web (https://pyspainmobility.github.io/pySpainMobility/reference/mobility.html) we get this info:
+![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
+![DuckDB](https://img.shields.io/badge/DuckDB-OLAP-yellow)
+![Status](https://img.shields.io/badge/Methodology-Agile-orange)
 
-Parameters:
+## 📖 Overview
 
-        version (int) – The version of the data to download. Default is 2. Version must be 1 or 2. Version 1 contains the data from 2020 to 2021. Version 2 contains the data from 2022 onwards.
+This repository contains an end-to-end data analysis pipeline that correlates human mobility patterns in Spain with socio-economic data. Using **DuckDB** for high-performance in-process SQL and **MITMA** (Ministry of Transport) open data, this project constructs a Medallion Architecture (Bronze $\to$ Silver $\to$ Gold) to identify infrastructure gaps and mobility trends.
 
-        zones (str) – The zones to download the data for. Default is municipalities. Zones must be one of the following: districts, dist, distr, distritos, municipalities, muni, municipal, municipios, lua, large_urban_areas, gau, gaus, grandes_areas_urbanas
+This document serves as a record of the technical decisions made during the development process, simulating Agile methodology sprints.
 
-        start_date (str) – The start date of the data to download. Date must be in the format YYYY-MM-DD. A start date is required
+---
 
-        end_date (str) – The end date of the data to download. Default is None. Date must be in the format YYYY-MM-DD. if not specified, the end date will be the same as the start date.
+## 🔄 Agile Development Log
 
-        output_directory (str) – The directory to save the raw data and the processed parquet. Default is None. If not specified, the data will be saved in a folder named ‘data’ in user’s home directory.
+### 1. Data Acquisition (Sprint 1)
+**Challenge:** We initially located the data on the [MITMA Open Data portal](https://www.transportes.gob.es/ministerio/proyectos-singulares/estudios-de-movilidad-con-big-data/opendata-movilidad). However, manually downloading every monthly dataset was infeasible due to physical storage constraints and download times (approx. 5GB per file).
 
-        use_dask (bool) – Whether to use Dask for processing large datasets. Default is False. Requires dask to be installed.
+**Solution:** We utilized the `pyspainmobility` Python package provided by the ministry to streamline extraction.
 
-2. Data exploration
-Now, checking the GitHub repository more in depth, they have an examples folder where they share some use cases for this package. We'll use the one called "examples/01-madrid.ipynb" but applied to Valencia.
-Example: Mean distance of the mobility of the population is 70.09km.
+**Library Configuration Used:**
+According to the [documentation](https://pyspainmobility.github.io/pySpainMobility/reference/mobility.html), the key parameters for the `Mobility` class are:
 
-References:
-Beneduce, C., Gullón Muñoz-Repiso, T., Lepri, B., & Luca, M. (2025). pySpainMobility: a Python Package to Access and Manage Spanish Open Mobility Data
+* `version` (int): Data version (Default: 2). Version 1 covers 2020-2021; Version 2 covers 2022 onwards.
+* `zones` (str): Geographic granularity. Options: `districts`, `municipalities` (default), `large_urban_areas` (GAU).
+* `start_date` (str): Required format `YYYY-MM-DD`.
+* `end_date` (str): Optional. Defaults to `start_date` if not specified.
+* `output_directory` (str): Destination for raw data and processed parquet files.
+* `use_dask` (bool): Option to use Dask for large dataset processing.
+
+### 2. Data Exploration (Sprint 2)
+**Strategy:** We analyzed the official [examples folder](https://github.com/pyspainmobility/pySpainMobility/tree/main/examples) from the repository. Specifically, we adapted the logic from `examples/01-madrid.ipynb` to apply it to the **Valencia** region.
+
+**Initial Finding:**
+* The calculated mean distance of population mobility in the sample period is **70.09 km**.
+
+---
+
+## 🏗️ Data Pipeline Architecture
+
+The project is structured around a **DuckDB Medallion Architecture**:
+
+### 🥉 Bronze Layer (Raw Ingestion)
+* **Mobility Data:** Ingested via `pyspainmobility` for Districts, Municipalities, and GAUs.
+* **Socio-economic Data:** Raw Excel ingestion of Population (`poblaciones.xlsx`) and Income (`rentas.xlsx`) from INE.
+
+### 🥈 Silver Layer (Cleaning & Integration)
+* **Identity Resolution:** Mapping table (`rel_muni`) created to link MITMA transport codes with INE census codes.
+* **GAU Parsing:** Logic to resolve "Zone GAU [City]" strings to actual municipality names.
+* **Enrichment:** Joins trip data with population and average rent metrics.
+
+### 🥇 Gold Layer (Business Aggregates)
+* **Infrastructure Index:** Implementation of a Gravity Model ($Pop_A \times Pop_B / Dist^2$) to compare theoretical demand vs. actual trips.
+* **Provincial Rollup:** Aggregation of municipal flows to analyze inter-provincial isolation (e.g., identifying provinces with the lowest interaction with Valencia).
+
+---
+
+## 🛠️ Tech Stack
+
+* **Language:** Python 3.x
+* **Query Engine:** [DuckDB](https://duckdb.org/) (In-process SQL OLAP)
+* **Data Access:** `pyspainmobility`
+* **Data Manipulation:** Pandas
+* **Visualization:** Seaborn / Matplotlib
+
+## 🚀 Getting Started
+
+### Prerequisites
+```bash
+pip install pandas duckdb pyspainmobility seaborn matplotlib openpyxl
