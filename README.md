@@ -24,14 +24,9 @@ This document serves as a record of the technical decisions made during the deve
 **Solution:** We utilized the `pyspainmobility` Python package provided by the ministry to streamline extraction.
 
 **Library Configuration Used:**
-According to the [documentation](https://pyspainmobility.github.io/pySpainMobility/reference/mobility.html), the key parameters for the `Mobility` class are:
-
 * `version` (int): Data version (Default: 2). Version 1 covers 2020-2021; Version 2 covers 2022 onwards.
 * `zones` (str): Geographic granularity. Options: `districts`, `municipalities` (default), `large_urban_areas` (GAU).
 * `start_date` (str): Required format `YYYY-MM-DD`.
-* `end_date` (str): Optional. Defaults to `start_date` if not specified.
-* `output_directory` (str): Destination for raw data and processed parquet files.
-* `use_dask` (bool): Option to use Dask for large dataset processing.
 
 ### 2. Data Exploration (Sprint 2)
 **Strategy:** We analyzed the official [examples folder](https://github.com/pyspainmobility/pySpainMobility/tree/main/examples) from the repository. Specifically, we adapted the logic from `examples/01-madrid.ipynb` to apply it to the **Valencia** region.
@@ -46,17 +41,33 @@ According to the [documentation](https://pyspainmobility.github.io/pySpainMobili
 The project is structured around a **DuckDB Medallion Architecture**:
 
 ### 🥉 Bronze Layer (Raw Ingestion)
-* **Mobility Data:** Ingested via `pyspainmobility` for Districts, Municipalities, and GAUs.
-* **Socio-economic Data:** Raw Excel ingestion of Population (`poblaciones.xlsx`) and Income (`rentas.xlsx`) from INE.
+* **Mobility Data:** Raw files for Distritos, Municipios, and GAUs.
+* **Socio-economic Data:** Raw ingestion of Population and Income from INE.
+* **Goal:** **Preserve the data exactly as the source provided.**
 
 ### 🥈 Silver Layer (Cleaning & Integration)
-* **Identity Resolution:** Mapping table (`rel_muni`) created to link MITMA transport codes with INE census codes.
-* **GAU Parsing:** Logic to resolve "Zone GAU [City]" strings to actual municipality names.
-* **Enrichment:** Joins trip data with population and average rent metrics.
+* **Consolidation:** Combines the three raw mobility sources, resolving data overlap (desduplicación).
+* **Enrichment:** Joins trip data with population, income, and temporal features (`day_of_week`).
+* **Goal:** **Provide a single, cleaned, and granular source of truth.**
 
 ### 🥇 Gold Layer (Business Aggregates)
-* **Infrastructure Index:** Implementation of a Gravity Model ($Pop_A \times Pop_B / Dist^2$) to compare theoretical demand vs. actual trips.
-* **Provincial Rollup:** Aggregation of municipal flows to analyze inter-provincial isolation (e.g., identifying provinces with the lowest interaction with Valencia).
+* **Modeling:** Calculates the **Infrastructure Coverage Index** (KPI) using the Gravity Model.
+* **Strategic Aggregation:** Rolls up data to the Provincial level to measure macro-flows.
+* **Goal:** **Produce final, aggregated answers (KPIs) for the business.**
+
+---
+
+## 🗃️ Repository Data Schema
+
+| Capa | Nombre de la Tabla | Granularidad / Función | Campos Clave (Schema) |
+| :--- | :--- | :--- | :--- |
+| **BRONZE** | `viajes_..._bronze` (3 tablas) | Datos de viaje crudos e inmutables. | `date`, `hour`, `id_origin`, `id_destination`, `n_trips`, `trips_total_length_km` |
+| **BRONZE** | `poblacion_bronze`, `renta_bronze` | Datos socioeconómicos crudos. | `code`, `name`, `population`/`rent` |
+| **SILVER** | `silver_zone_metrics` | Catálogo de Dimensiones/Métricas limpias. | `zone_id`, `zone_name`, `population`, `avg_rent` |
+| **SILVER** | `rel_muni`, `dim_provincias` | Tablas de Traducción/Lookup (GAU/INE y códigos provinciales). | `code_ine`/`code_mitma` (`rel_muni`); `code`/`name` (`dim_provincias`) |
+| **SILVER** | **`silver_integrated_od`** | **Hecho Central Enriquecido.** | `date`, `hour`, `n_trips`, `day_of_week`, `origin_name`, **`origin_population`**, **`destination_rent`**, etc. |
+| **GOLD** | `gold_analisis_infraestructura` | KPI de Eficiencia de Infraestructura (Modelado). | `municipio`, `total_viajes_reales`, `potencial_teorico`, **`indice_cobertura`** |
+| **GOLD** | `gold_flujos_provinciales` | KPI de Flujos Macroeconómicos Interprovinciales. | `provincia_origen`, `provincia_destino`, **`viajes_totales`**, `distancia_media_km` |
 
 ---
 
