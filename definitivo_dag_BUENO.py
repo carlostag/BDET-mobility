@@ -5,7 +5,7 @@ from pendulum import datetime
 import duckdb
 
 # ===============================================================
-# 1. UTILIDADES (CONTR_POSTGRES y memory incluidos)
+# 1. UTILIDADES
 # ===============================================================
 
 def init_duckdb(aws_conn, pg_conn):
@@ -18,14 +18,15 @@ def init_duckdb(aws_conn, pg_conn):
     return con
 
 # ===============================================================
-# 2. DAG
+# 2. DAG (ID ORIGINAL RECUPERADO)
 # ===============================================================
 
 @dag(
-    dag_id="mobility_FULL_PIPELINE_FINAL",
+    dag_id="mobility_FULL_PIPELINE_2023", # <--- Volvemos al ID original
     start_date=datetime(2025, 1, 1),
     schedule=None,
-    catchup=False
+    catchup=False,
+    tags=["final_fix"]
 )
 def mobility_ingestion():
 
@@ -37,16 +38,26 @@ def mobility_ingestion():
         con.execute("ATTACH 'ducklake:' AS lake;")
         con.execute("CREATE SCHEMA IF NOT EXISTS lake.bronze;")
         
-        # Ingesta Bronze
-        con.execute("CREATE OR REPLACE TABLE lake.bronze.renta AS SELECT * FROM read_csv_auto('https://www.ine.es/jaxiT3/files/t/es/csv_bd/30824.csv?nocab=1', all_varchar=true);")
-        con.execute("CREATE OR REPLACE TABLE lake.bronze.poblacion AS SELECT * FROM read_csv_auto('https://movilidad-opendata.mitma.es/zonificacion/zonificacion_municipios/poblacion_municipios.csv', sep='|', all_varchar=true);")
+        # --- BRONZE CON COLUMNAS FORZADAS ---
+        # Forzamos nombres para que Silver no dependa de la detección automática
+        con.execute("""
+            CREATE OR REPLACE TABLE lake.bronze.renta AS 
+            SELECT 
+                "Municipios" AS cod_municipio, 
+                "Total" AS valor_renta,
+                "Indicadores de renta media" AS indicador,
+                "Periodo" AS anio
+            FROM read_csv_auto('https://www.ine.es/jaxiT3/files/t/es/csv_bd/30824.csv?nocab=1', sep=';', header=true);
+        """)
+        
+        con.execute("""
+            CREATE OR REPLACE TABLE lake.bronze.poblacion AS 
+            SELECT column0 AS cod_municipio, column1 AS valor_poblacion
+            FROM read_csv_auto('https://movilidad-opendata.mitma.es/zonificacion/zonificacion_municipios/poblacion_municipios.csv', sep='|', header=false);
+        """)
+
         con.execute("CREATE OR REPLACE TABLE lake.bronze.geo_municipios AS SELECT * FROM ST_Read('https://movilidad-opendata.mitma.es/zonificacion/zonificacion_municipios/zonificacion_municipios.shp');")
         con.execute("CREATE OR REPLACE TABLE lake.bronze.relaciones AS SELECT * FROM read_csv_auto('https://movilidad-opendata.mitma.es/zonificacion/relacion_ine_zonificacionMitma.csv', sep='|', header=true);")
-        
-        # --- BLOQUE DE DIAGNÓSTICO: Esto aparecerá en los logs de Airflow ---
-        print("ESQUEMA DETECTADO EN RENTA:", con.execute("DESCRIBE lake.bronze.renta").fetchall())
-        print("ESQUEMA DETECTADO EN POBLACION:", con.execute("DESCRIBE lake.bronze.poblacion").fetchall())
-        
         con.close()
 
     @task
@@ -59,7 +70,7 @@ def mobility_ingestion():
         con.execute("CREATE OR REPLACE TABLE lake.bronze.trips_municipios_2023 AS SELECT * FROM read_csv_auto('s3://dl-mobility-spain/audit/viajes/municipios/2023/01/20230101_Viajes_municipios.csv.gz', all_varchar=true) LIMIT 0;")
         con.close()
 
-    # --- BATCH (Variables exactas del sql_runner.py) ---
+    # --- BATCH (Variables exactas de sql_runner.py) ---
     pg_conn = BaseHook.get_connection("my_postgres_conn")
     batch_overrides_list = [
         {
@@ -67,7 +78,7 @@ def mobility_ingestion():
                 {"name": "memory",             "value": "2GB"}, #
                 {"name": "HOST_POSTGRES",      "value": pg_conn.host}, #
                 {"name": "USUARIO_POSTGRES",   "value": pg_conn.login}, #
-                {"name": "CONTR_POSTGRES",     "value": pg_conn.password}, #
+                {"name": "CONTR_POSTGRES",     "value": pg_conn.password}, # El typo
                 {"name": "RUTA_S3_DUCKLAKE",   "value": "s3://pruebas-airflow-carlos/"}, #
                 {"name": "SQL_QUERY",          "value": f"INSERT INTO bronze.trips_municipios_2023 SELECT * FROM read_csv('{fp}', header=true, auto_detect=true, all_varchar=true);"} #
             ]
@@ -91,21 +102,21 @@ def mobility_ingestion():
         con.execute("ATTACH 'ducklake:' AS lake;")
         con.execute("CREATE SCHEMA IF NOT EXISTS lake.silver; USE lake;")
 
-        # Silver Población (Usando tu info: column0 y Total)
+        # Silver Población (Usando los nombres forzados en Bronze)
         con.execute("""
             CREATE OR REPLACE TABLE silver.poblacion AS 
-            SELECT CAST(SUBSTR(TRIM(column0), 1, 5) AS INTEGER) AS id, CAST(REPLACE("Total", ',', '') AS INTEGER) AS poblacion 
-            FROM bronze.poblacion WHERE TRY_CAST(REPLACE("Total", ',', '') AS INTEGER) IS NOT NULL;
+            SELECT CAST(SUBSTR(TRIM(cod_municipio), 1, 5) AS INTEGER) AS id, CAST(REPLACE(valor_poblacion, ',', '') AS INTEGER) AS poblacion 
+            FROM bronze.poblacion WHERE TRY_CAST(REPLACE(valor_poblacion, ',', '') AS INTEGER) IS NOT NULL;
         """)
 
-        # Silver Renta (Usando tu info: column0 y "Renta neta media por persona")
+        # Silver Renta (Usando los nombres forzados en Bronze)
         con.execute("""
             CREATE OR REPLACE TABLE silver.renta AS 
-            SELECT CAST(SUBSTR(TRIM(column0), 1, 5) AS INTEGER) AS id, CAST(REPLACE("Renta neta media por persona", '.', '') AS INTEGER) AS renta 
-            FROM bronze.renta WHERE TRY_CAST(REPLACE("Renta neta media por persona", '.', '') AS INTEGER) IS NOT NULL;
+            SELECT CAST(SUBSTR(TRIM(cod_municipio), 1, 5) AS INTEGER) AS id, CAST(REPLACE(valor_renta, '.', '') AS INTEGER) AS renta 
+            FROM bronze.renta 
+            WHERE indicador LIKE '%Renta neta media por persona%' AND anio = '2023';
         """)
 
-        # Silver Lugares y Viajes
         con.execute("CREATE OR REPLACE TABLE silver.lugares AS SELECT CAST(r.municipio AS INTEGER) AS id, r.municipio_mitma AS id_mitma, g.NAME AS nombre, g.geom AS coordenadas, 'municipio' AS tipo_zona, ST_X(ST_Centroid(g.geom)) AS longitude, ST_Y(ST_Centroid(g.geom)) AS latitude FROM bronze.relaciones r JOIN bronze.geo_municipios g ON TRIM(r.municipio_mitma) = TRIM(g.ID);")
         con.execute("CREATE OR REPLACE TABLE silver.viajes AS SELECT CAST(STRPTIME(CAST(fecha AS VARCHAR), '%Y%m%d') AS DATE) AS fecha, CAST(periodo AS INTEGER) AS periodo, CAST(origen AS INTEGER) AS id_origen, CAST(destino AS INTEGER) AS id_destino, CAST(viajes AS INTEGER) AS viajes, CAST(viajes_km * 1000 AS DOUBLE) AS viajes_metros FROM bronze.trips_municipios_2023 WHERE viajes_km IS NOT NULL;")
         con.close()
