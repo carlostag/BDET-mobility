@@ -9,7 +9,6 @@ import duckdb
 # ===============================================================
 
 def init_duckdb(aws_conn, pg_conn):
-	"""Inicializa DuckDB local con las extensiones y secretos necesarios."""
 	con = duckdb.connect(database=":memory:")
 	con.execute("INSTALL ducklake; INSTALL postgres; INSTALL spatial; INSTALL httpfs;")
 	con.execute("LOAD ducklake; LOAD spatial; LOAD postgres; LOAD httpfs;")
@@ -27,31 +26,29 @@ def init_duckdb(aws_conn, pg_conn):
 	con.execute("CREATE OR REPLACE SECRET secreto_ducklake (TYPE DUCKLAKE, METADATA_PATH '', METADATA_PARAMETERS MAP {'TYPE': 'postgres', 'SECRET': 'secreto_postgres'});")
 	return con
 
-def get_2023_full_year_paths():
-	"""Genera la lista de los 365 archivos CSV de movilidad en S3."""
+def get_2023_week_paths():
+	"""MODIFICADO: Solo devuelve del 1 al 7 de enero de 2023."""
 	base = "s3://dl-mobility-spain/audit/viajes/municipios/2023"
 	suffix = "Viajes_municipios"
-	days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+	# Solo mes 01, días del 1 al 7
 	return [
-		f"{base}/{month:02d}/2023{month:02d}{day:02d}_{suffix}.csv.gz"
-		for month, num_days in enumerate(days_per_month, start=1)
-		for day in range(1, num_days + 1)
+		f"{base}/01/202301{day:02d}_{suffix}.csv.gz"
+		for day in range(1, 8)
 	]
 
 # ===============================================================
-# 2. DEFINICIÓN DEL DAG
+# 2. DEFINICIÓN DEL DAG (Cambio de nombre para pruebas)
 # ===============================================================
 
 @dag(
-	dag_id="mobility_FULL_YEAR_2023_Final",
+	dag_id="mobility_ONE_WEEK_TEST_2023",
 	start_date=datetime(2025, 1, 1),
 	schedule=None,
 	catchup=False,
-	tags=["bronze", "silver", "lake", "aws_batch"]
+	tags=["test", "bronze", "silver", "aws_batch"]
 )
 def mobility_ingestion():
 
-	# --- BRONZE: Datos Oficiales (Dimensiones) ---
 	@task
 	def ingest_bronze_official_data():
 		aws_conn = BaseHook.get_connection("aws_s3_conn")
@@ -59,14 +56,12 @@ def mobility_ingestion():
 		con = init_duckdb(aws_conn, pg_conn)
 		con.execute(f"ATTACH 'ducklake:secreto_ducklake' AS lake (DATA_PATH 's3://pruebas-airflow-carlos/', OVERRIDE_DATA_PATH TRUE);")
 		con.execute("CREATE SCHEMA IF NOT EXISTS lake.bronze;")
-		
 		con.execute("CREATE OR REPLACE TABLE lake.bronze.renta AS SELECT * FROM read_csv_auto('https://www.ine.es/jaxiT3/files/t/es/csv_bd/30824.csv?nocab=1', sep='\\t', header=true, all_varchar=true);")
 		con.execute("CREATE OR REPLACE TABLE lake.bronze.poblacion AS SELECT * FROM read_csv_auto('https://movilidad-opendata.mitma.es/zonificacion/zonificacion_municipios/poblacion_municipios.csv', sep='|', header=false, all_varchar=true);")
 		con.execute("CREATE OR REPLACE TABLE lake.bronze.geo_municipios AS SELECT * FROM ST_Read('https://movilidad-opendata.mitma.es/zonificacion/zonificacion_municipios/zonificacion_municipios.shp');")
 		con.execute("CREATE OR REPLACE TABLE lake.bronze.relaciones AS SELECT * FROM read_csv_auto('https://movilidad-opendata.mitma.es/zonificacion/relacion_ine_zonificacionMitma.csv', sep='|', header=true, all_varchar=true);")
 		con.close()
 
-	# --- BRONZE: Inicialización Tabla Viajes ---
 	@task
 	def create_viajes_bronze_table_init():
 		aws_conn = BaseHook.get_connection("aws_s3_conn")
@@ -76,11 +71,10 @@ def mobility_ingestion():
 		con.execute("CREATE OR REPLACE TABLE lake.bronze.trips_municipios_2023 AS SELECT * FROM read_csv_auto('s3://dl-mobility-spain/audit/viajes/municipios/2023/01/20230101_Viajes_municipios.csv.gz', all_varchar=true) LIMIT 0;")
 		con.close()
 
-	# --- BRONZE: Carga Batch Masiva (Carga cada contenedor con httpfs) ---
+	# --- CONFIGURACIÓN BATCH ---
 	aws_conn = BaseHook.get_connection("aws_s3_conn")
 	pg_conn = BaseHook.get_connection("my_postgres_conn")
 
-	# Prefijo SQL corregido: Incluye INSTALL/LOAD httpfs para lectura de S3
 	sql_prefix = (
 		"INSTALL httpfs; INSTALL ducklake; INSTALL postgres; "
 		"LOAD httpfs; LOAD ducklake; LOAD postgres; "
@@ -91,6 +85,7 @@ def mobility_ingestion():
 		"USE lake; "
 	)
 
+	# MODIFICADO: Ahora solo itera sobre los 7 días de la semana de prueba
 	batch_overrides_list = [
 		{
 			"environment": [
@@ -101,18 +96,17 @@ def mobility_ingestion():
 				{"name": "memory", "value": "2GB"}
 			]
 		}
-		for fp in get_2023_full_year_paths()
+		for fp in get_2023_week_paths()
 	]
 
 	load_viajes_batch = BatchOperator.partial(
 		task_id         = "load_viajes_batch",
-		job_name        = "ingest_trip_day",
+		job_name        = "ingest_trip_week_test",
 		job_queue       = "DuckJobQueue",
 		job_definition  = "EC2JobDefinition:2", 
 		region_name     = "eu-central-1"
 	).expand(container_overrides=batch_overrides_list)
 
-	# --- SILVER: Transformación y Limpieza Final ---
 	@task
 	def create_silver_layer():
 		aws_conn = BaseHook.get_connection("aws_s3_conn")
@@ -141,7 +135,7 @@ def mobility_ingestion():
 			WHERE Periodo = '2023';
 		""")
 
-		# Transformación Silver Lugares (Geo)
+		# Transformación Silver Lugares
 		con.execute("""
 			CREATE OR REPLACE TABLE silver.lugares AS 
 			SELECT 
@@ -157,7 +151,7 @@ def mobility_ingestion():
 				ON TRIM(r.municipio_mitma) = TRIM(g.ID);
 		""")
 
-		# Transformación Silver Viajes (Cruce de la carga masiva)
+		# Transformación Silver Viajes (Cruce de la semana cargada)
 		con.execute("""
 			CREATE OR REPLACE TABLE silver.viajes AS 
 			SELECT 
@@ -172,7 +166,6 @@ def mobility_ingestion():
 		""")
 		con.close()
 
-	# Orquestación
 	[ingest_bronze_official_data(), create_viajes_bronze_table_init()] >> load_viajes_batch >> create_silver_layer()
 
 mobility_dag = mobility_ingestion()
