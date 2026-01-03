@@ -1,15 +1,15 @@
 from airflow.decorators import dag, task
-from airflow.utils.task_group import TaskGroup
 from airflow.hooks.base import BaseHook
-from airflow.providers.amazon.aws.hooks.batch_client import BatchHook
+from airflow.providers.amazon.aws.operators.batch import BatchOperator
 from pendulum import datetime
-from datetime import timedelta
 import duckdb
 
 # ===============================================================
-# Inicialización DuckDB + DuckLake (Catálogo 'lake')
+# 1. UTILIDADES Y CONFIGURACIÓN
 # ===============================================================
+
 def init_duckdb(aws_conn, pg_conn):
+    """Inicializa DuckDB con los secretos para DuckLake y Postgres."""
     con = duckdb.connect(database=":memory:")
     con.execute("INSTALL ducklake; INSTALL postgres; INSTALL spatial;")
     con.execute("LOAD ducklake; LOAD spatial; LOAD postgres;")
@@ -44,6 +44,7 @@ def init_duckdb(aws_conn, pg_conn):
     return con
 
 def get_2023_full_year_paths():
+    """Genera las rutas de S3 para los 365 días del año 2023."""
     base = "s3://dl-mobility-spain/audit/viajes/municipios/2023"
     suffix = "Viajes_municipios"
     days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
@@ -53,46 +54,76 @@ def get_2023_full_year_paths():
         for day in range(1, num_days + 1)
     ]
 
+# ===============================================================
+# 2. DEFINICIÓN DEL DAG
+# ===============================================================
+
 @dag(
-    dag_id="mobility_BATCH_FULL_YEAR_2023_v3",
+    dag_id="mobility_FULL_YEAR_2023_Final",
     start_date=datetime(2025, 1, 1),
     schedule=None,
     catchup=False,
-    tags=["bronze", "silver", "aws_batch", "airflow_3"]
+    tags=["bronze", "silver", "lake", "aws_batch"]
 )
 def mobility_ingestion():
 
-    # ===========================================================
-    # 1. BRONZE LOCAL: CONFIGURACIÓN INICIAL
-    # ===========================================================
-
+    # -----------------------------------------------------------
+    # TAREA: Ingestión de Datos Oficiales (Bronze)
+    # -----------------------------------------------------------
     @task
     def ingest_bronze_official_data():
         aws_conn = BaseHook.get_connection("aws_s3_conn")
         pg_conn = BaseHook.get_connection("my_postgres_conn")
         con = init_duckdb(aws_conn, pg_conn)
+        
         con.execute(f"ATTACH 'ducklake:secreto_ducklake' AS lake (DATA_PATH 's3://pruebas-airflow-carlos/', OVERRIDE_DATA_PATH TRUE);")
         con.execute("CREATE SCHEMA IF NOT EXISTS lake.bronze;")
 
-        # Cargamos dimensiones oficiales como VARCHAR para evitar errores de tipo
+        # Renta (INE)
         con.execute("""
             CREATE OR REPLACE TABLE lake.bronze.renta AS 
-            SELECT * FROM read_csv_auto('https://www.ine.es/jaxiT3/files/t/es/csv_bd/30824.csv?nocab=1', sep='\\t', all_varchar=true);
+            SELECT * FROM read_csv_auto(
+                'https://www.ine.es/jaxiT3/files/t/es/csv_bd/30824.csv?nocab=1', 
+                sep         = '\\t', 
+                header      = true,
+                all_varchar = true
+            );
         """)
+
+        # Población (MITMA)
         con.execute("""
             CREATE OR REPLACE TABLE lake.bronze.poblacion AS 
-            SELECT * FROM read_csv_auto('https://movilidad-opendata.mitma.es/zonificacion/zonificacion_municipios/poblacion_municipios.csv', sep='|', all_varchar=true);
+            SELECT * FROM read_csv_auto(
+                'https://movilidad-opendata.mitma.es/zonificacion/zonificacion_municipios/poblacion_municipios.csv', 
+                sep         = '|', 
+                header      = false,
+                all_varchar = true
+            );
         """)
+
+        # Geometría
         con.execute("""
             CREATE OR REPLACE TABLE lake.bronze.geo_municipios AS 
-            SELECT * FROM ST_Read('https://movilidad-opendata.mitma.es/zonificacion/zonificacion_municipios/zonificacion_municipios.shp');
+            SELECT * FROM ST_Read(
+                'https://movilidad-opendata.mitma.es/zonificacion/zonificacion_municipios/zonificacion_municipios.shp'
+            );
         """)
+
+        # Relaciones
         con.execute("""
             CREATE OR REPLACE TABLE lake.bronze.relaciones AS 
-            SELECT * FROM read_csv_auto('https://movilidad-opendata.mitma.es/zonificacion/relacion_ine_zonificacionMitma.csv', sep='|', all_varchar=true);
+            SELECT * FROM read_csv_auto(
+                'https://movilidad-opendata.mitma.es/zonificacion/relacion_ine_zonificacionMitma.csv', 
+                sep         = '|', 
+                header      = true,
+                all_varchar = true
+            );
         """)
         con.close()
 
+    # -----------------------------------------------------------
+    # TAREA: Inicialización de tabla de Viajes (Bronze)
+    # -----------------------------------------------------------
     @task
     def create_viajes_bronze_table_init():
         aws_conn = BaseHook.get_connection("aws_s3_conn")
@@ -100,7 +131,7 @@ def mobility_ingestion():
         con = init_duckdb(aws_conn, pg_conn)
         con.execute(f"ATTACH 'ducklake:secreto_ducklake' AS lake (DATA_PATH 's3://pruebas-airflow-carlos/', OVERRIDE_DATA_PATH TRUE);")
         
-        # Idempotencia: tabla vacía inicial
+        # Estructura inicial de 2023 (Vacía para idempotencia)
         con.execute("""
             CREATE OR REPLACE TABLE lake.bronze.trips_municipios_2023 AS 
             SELECT * FROM read_csv_auto(
@@ -110,89 +141,106 @@ def mobility_ingestion():
         """)
         con.close()
 
-    # ===========================================================
-    # 2. BRONZE BATCH: ENVÍO DINÁMICO (Compatible con Airflow 3)
-    # ===========================================================
+    # -----------------------------------------------------------
+    # TAREA: Carga masiva mediante AWS Batch (Bronze)
+    # -----------------------------------------------------------
+    
+    # Mapeo dinámico de overrides (container_overrides es el nombre correcto)
+    batch_overrides_list = [
+        {
+            "environment": [
+                {
+                    "name": "SQL_QUERY", 
+                    "value": f"INSERT INTO lake.bronze.trips_municipios_2023 SELECT * FROM read_csv('{fp}', header=true, auto_detect=true, all_varchar=true);"
+                },
+                {"name": "memory", "value": "2GB"}
+            ]
+        }
+        for fp in get_2023_full_year_paths()
+    ]
 
+    load_viajes_batch = BatchOperator.partial(
+        task_id         = "load_viajes_batch",
+        job_name        = "ingest_trip_day",
+        job_queue       = "DuckJobQueue",
+        job_definition  = "EC2JobDefinition:2", 
+        region_name     = "eu-central-1"
+    ).expand(container_overrides=batch_overrides_list)
+
+    # -----------------------------------------------------------
+    # TAREA: Transformación a Capa Silver
+    # -----------------------------------------------------------
     @task
-    def submit_batch_ingestion(file_path: str):
-        hook = BatchHook(region_name="eu-central-1")
-        
-        # SQL con all_varchar=true para evitar el error "si/no" -> BOOLEAN
-        sql = f"INSERT INTO lake.bronze.trips_municipios_2023 SELECT * FROM read_csv('{file_path}', header=true, all_varchar=true);"
-        
-        response = hook.submit_job(
-            job_name       = "ingest_trip_day",
-            job_queue      = "DuckJobQueue",
-            job_definition = "EC2JobDefinition:2",
-            containerOverrides = {
-                "environment": [
-                    {"name": "SQL_QUERY", "value": sql},
-                    {"name": "memory",    "value": "2GB"}
-                ]
-            }
-        )
-        return response['jobId']
-
-    # Mapeo dinámico de los 365 días
-    batch_jobs = submit_batch_ingestion.expand(file_path=get_2023_full_year_paths())
-
-    # ===========================================================
-    # 3. SILVER: TRANSFORMACIÓN Y LIMPIEZA (CAST DE TIPOS)
-    # ===========================================================
-
-    @task
-    def run_silver_transformation(wait_for_jobs):
+    def create_silver_layer():
         aws_conn = BaseHook.get_connection("aws_s3_conn")
         pg_conn = BaseHook.get_connection("my_postgres_conn")
         con = init_duckdb(aws_conn, pg_conn)
+        
         con.execute(f"ATTACH 'ducklake:secreto_ducklake' AS lake (DATA_PATH 's3://pruebas-airflow-carlos/', OVERRIDE_DATA_PATH TRUE);")
-        con.execute("CREATE SCHEMA IF NOT EXISTS lake.silver; USE lake;")
+        con.execute("CREATE SCHEMA IF NOT EXISTS lake.silver;")
+        con.execute("USE lake;")
 
-        # Silver Población: Limpiamos el texto y convertimos a INTEGER
+        # Silver Población
         con.execute("""
             CREATE OR REPLACE TABLE silver.poblacion AS 
-            SELECT CAST(SUBSTR(TRIM(column0), 1, 5) AS INTEGER) AS id, 
-                   CAST(REPLACE(column1, ',', '') AS INTEGER)  AS poblacion 
-            FROM bronze.poblacion WHERE TRY_CAST(REPLACE(column1, ',', '') AS INTEGER) IS NOT NULL;
+            SELECT 
+                CAST(SUBSTR(TRIM(column0), 1, 5) AS INTEGER) AS id, 
+                CAST(REPLACE(column1, ',', '') AS INTEGER)  AS poblacion 
+            FROM bronze.poblacion 
+            WHERE TRY_CAST(REPLACE(column1, ',', '') AS INTEGER) IS NOT NULL;
         """)
 
-        # Silver Renta: Limpiamos puntos y filtramos año
+        # Silver Renta
         con.execute("""
             CREATE OR REPLACE TABLE silver.renta AS 
-            SELECT CAST(SUBSTR(TRIM(column0), 1, 5) AS INTEGER) AS id, 
-                   CAST(REPLACE("Renta neta media por persona", '.', '') AS INTEGER) AS renta 
-            FROM bronze.renta WHERE Periodo = '2023';
+            SELECT 
+                CAST(SUBSTR(TRIM(column0), 1, 5) AS INTEGER)                      AS id, 
+                CAST(REPLACE("Renta neta media por persona", '.', '') AS INTEGER) AS renta 
+            FROM bronze.renta 
+            WHERE Periodo = '2023';
         """)
 
-        # Silver Lugares: Unión de Geo y Relaciones
+        # Silver Lugares (Join Geo + Atributos)
         con.execute("""
-            CREATE OR REPLACE TABLE silver.lugares AS
-            SELECT CAST(r.municipio AS INTEGER) AS id, r.municipio_mitma AS id_mitma,
-                   g.NAME AS nombre, g.geom AS coordenadas, 'municipio' AS tipo_zona,
-                   ST_X(ST_Centroid(g.geom)) AS longitude, ST_Y(ST_Centroid(g.geom)) AS latitude
-            FROM bronze.relaciones r
-            JOIN bronze.geo_municipios g ON TRIM(r.municipio_mitma) = TRIM(g.ID);
+            CREATE OR REPLACE TABLE silver.lugares AS 
+            SELECT 
+                CAST(r.municipio AS INTEGER)    AS id, 
+                r.municipio_mitma               AS id_mitma, 
+                g.NAME                          AS nombre, 
+                g.geom                          AS coordenadas, 
+                'municipio'                     AS tipo_zona, 
+                ST_X(ST_Centroid(g.geom))       AS longitude, 
+                ST_Y(ST_Centroid(g.geom))       AS latitude 
+            FROM bronze.relaciones r 
+            JOIN bronze.geo_municipios g 
+                ON TRIM(r.municipio_mitma) = TRIM(g.ID);
         """)
 
-        # Silver Viajes: Conversión final de la carga masiva de Batch
+        # Silver Viajes (Cruce de la carga masiva)
         con.execute("""
-            CREATE OR REPLACE TABLE silver.viajes AS
-            SELECT CAST(STRPTIME(CAST(fecha AS VARCHAR), '%Y%m%d') AS DATE) AS fecha,
-                   CAST(periodo AS INTEGER) AS periodo, CAST(origen AS INTEGER) AS id_origen,
-                   CAST(destino AS INTEGER) AS id_destino, CAST(viajes AS INTEGER) AS viajes,
-                   CAST(viajes_km * 1000 AS DOUBLE) AS viajes_metros
-            FROM bronze.trips_municipios_2023 WHERE viajes_km IS NOT NULL;
+            CREATE OR REPLACE TABLE silver.viajes AS 
+            SELECT 
+                CAST(STRPTIME(CAST(fecha AS VARCHAR), '%Y%m%d') AS DATE) AS fecha, 
+                CAST(periodo AS INTEGER)         AS periodo, 
+                CAST(origen AS INTEGER)          AS id_origen, 
+                CAST(destino AS INTEGER)         AS id_destino, 
+                CAST(viajes AS INTEGER)          AS viajes, 
+                CAST(viajes_km * 1000 AS DOUBLE) AS viajes_metros 
+            FROM bronze.trips_municipios_2023 
+            WHERE viajes_km IS NOT NULL;
         """)
         con.close()
 
-    # Orquestación
-    bronze_setup = ingest_bronze_official_data()
-    v_table_init = create_viajes_bronze_table_init()
+    # ===============================================================
+    # 3. ORQUESTACIÓN (FLUJO DE TRABAJO)
+    # ===============================================================
+
+    # Preparamos las tablas base y descargamos archivos oficiales
+    prep_official = ingest_bronze_official_data()
+    prep_trips    = create_viajes_bronze_table_init()
     
-    # La transformación Silver espera a que terminen los 365 envíos a Batch
-    silver_task = run_silver_transformation(wait_for_jobs=batch_jobs)
+    # Definimos la cadena de ejecución
+    [prep_official, prep_trips] >> load_viajes_batch >> create_silver_layer()
 
-    bronze_setup >> v_table_init >> batch_jobs >> silver_task
-
+# Instanciar el DAG
 mobility_dag = mobility_ingestion()
