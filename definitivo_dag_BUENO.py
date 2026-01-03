@@ -56,6 +56,8 @@ def mobility_ingestion():
         con = init_duckdb(aws_conn, pg_conn)
         con.execute(f"ATTACH 'ducklake:secreto_ducklake' AS lake (DATA_PATH 's3://pruebas-airflow-carlos/', OVERRIDE_DATA_PATH TRUE);")
         con.execute("CREATE SCHEMA IF NOT EXISTS lake.bronze;")
+        
+        # Ingestión con all_varchar para evitar errores de tipo en Bronze
         con.execute("CREATE OR REPLACE TABLE lake.bronze.renta AS SELECT * FROM read_csv_auto('https://www.ine.es/jaxiT3/files/t/es/csv_bd/30824.csv?nocab=1', sep='\\t', header=true, all_varchar=true);")
         con.execute("CREATE OR REPLACE TABLE lake.bronze.poblacion AS SELECT * FROM read_csv_auto('https://movilidad-opendata.mitma.es/zonificacion/zonificacion_municipios/poblacion_municipios.csv', sep='|', header=false, all_varchar=true);")
         con.execute("CREATE OR REPLACE TABLE lake.bronze.geo_municipios AS SELECT * FROM ST_Read('https://movilidad-opendata.mitma.es/zonificacion/zonificacion_municipios/zonificacion_municipios.shp');")
@@ -78,22 +80,14 @@ def mobility_ingestion():
     aws_conn = BaseHook.get_connection("aws_s3_conn")
     pg_conn = BaseHook.get_connection("my_postgres_conn")
 
-    # Este prefijo configura el entorno DuckDB dentro de cada contenedor de Batch
-    sql_prefix = f"""
-        INSTALL ducklake; INSTALL postgres; LOAD ducklake; LOAD postgres;
-        SET s3_region='eu-central-1';
-        SET s3_access_key_id='{aws_conn.login}';
-        SET s3_secret_access_key='{aws_conn.password}';
-        CREATE OR REPLACE SECRET secreto_postgres (
-            TYPE POSTGRES, HOST '{pg_conn.host}', PORT {pg_conn.port}, 
-            DATABASE '{pg_conn.schema}', USER '{pg_conn.login}', PASSWORD '{pg_conn.password}'
-        );
-        CREATE OR REPLACE SECRET secreto_ducklake (
-            TYPE DUCKLAKE, METADATA_PATH '', 
-            METADATA_PARAMETERS MAP {{'TYPE': 'postgres', 'SECRET': 'secreto_postgres'}}
-        );
-        ATTACH 'ducklake:secreto_ducklake' AS lake (DATA_PATH 's3://pruebas-airflow-carlos/', OVERRIDE_DATA_PATH TRUE);
-    """
+    # Prefijo SQL corregido: sin saltos de línea y con punto y coma tras ATTACH
+    sql_prefix = (
+        "INSTALL ducklake; INSTALL postgres; LOAD ducklake; LOAD postgres; "
+        f"SET s3_region='eu-central-1'; SET s3_access_key_id='{aws_conn.login}'; SET s3_secret_access_key='{aws_conn.password}'; "
+        f"CREATE OR REPLACE SECRET secreto_postgres (TYPE POSTGRES, HOST '{pg_conn.host}', PORT {pg_conn.port}, DATABASE '{pg_conn.schema}', USER '{pg_conn.login}', PASSWORD '{pg_conn.password}'); "
+        "CREATE OR REPLACE SECRET secreto_ducklake (TYPE DUCKLAKE, METADATA_PATH '', METADATA_PARAMETERS MAP {'TYPE': 'postgres', 'SECRET': 'secreto_postgres'}); "
+        "ATTACH 'ducklake:secreto_ducklake' AS lake (DATA_PATH 's3://pruebas-airflow-carlos/', OVERRIDE_DATA_PATH TRUE); "
+    )
 
     batch_overrides_list = [
         {
@@ -117,7 +111,7 @@ def mobility_ingestion():
     ).expand(container_overrides=batch_overrides_list)
 
     # ===========================================================
-    # 4. CAPA SILVER (TRANSFORMACIÓN LIMPIA)
+    # 4. CAPA SILVER (TRANSFORMACIÓN DEFINITIVA)
     # ===========================================================
 
     @task
@@ -128,7 +122,7 @@ def mobility_ingestion():
         con.execute(f"ATTACH 'ducklake:secreto_ducklake' AS lake (DATA_PATH 's3://pruebas-airflow-carlos/', OVERRIDE_DATA_PATH TRUE);")
         con.execute("CREATE SCHEMA IF NOT EXISTS lake.silver; USE lake;")
 
-        # Transformación Silver Población
+        # Silver Población
         con.execute("""
             CREATE OR REPLACE TABLE silver.poblacion AS 
             SELECT 
@@ -138,7 +132,7 @@ def mobility_ingestion():
             WHERE TRY_CAST(REPLACE(column1, ',', '') AS INTEGER) IS NOT NULL;
         """)
 
-        # Transformación Silver Renta
+        # Silver Renta
         con.execute("""
             CREATE OR REPLACE TABLE silver.renta AS 
             SELECT 
@@ -148,7 +142,7 @@ def mobility_ingestion():
             WHERE Periodo = '2023';
         """)
 
-        # Transformación Silver Lugares
+        # Silver Lugares
         con.execute("""
             CREATE OR REPLACE TABLE silver.lugares AS 
             SELECT 
@@ -164,7 +158,7 @@ def mobility_ingestion():
                 ON TRIM(r.municipio_mitma) = TRIM(g.ID);
         """)
 
-        # Transformación Silver Viajes (Cruce final de los datos de Batch)
+        # Silver Viajes
         con.execute("""
             CREATE OR REPLACE TABLE silver.viajes AS 
             SELECT 
