@@ -69,7 +69,7 @@ def get_con_and_attach():
 
     con.execute("""
         ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-            DATA_PATH 's3://pruebas-airflow-julia/',
+            DATA_PATH 's3://pruebas-airflow-carlos/',
             OVERRIDE_DATA_PATH TRUE
         );
     """)
@@ -237,7 +237,7 @@ def gold_analytics_poligono():
 
         s3.upload_file(
             local_path,
-            "pruebas-airflow-julia",
+            "pruebas-airflow-carlos",
             f"gold/report/mismatch_map_{run_id}.html"
         )
 
@@ -248,3 +248,4 @@ def gold_analytics_poligono():
 
 
 dag = gold_analytics_poligono()
+
