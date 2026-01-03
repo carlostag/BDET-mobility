@@ -1,13 +1,13 @@
 from airflow.decorators import dag, task
 from airflow.utils.task_group import TaskGroup
 from airflow.hooks.base import BaseHook
-from airflow.providers.amazon.aws.operators.batch import BatchOperator
+from airflow.providers.amazon.aws.hooks.batch_client import BatchHook # Hook oficial
 from pendulum import datetime
 from datetime import timedelta
 import duckdb
 
 # ===============================================================
-# Inicialización DuckDB + DuckLake (Catálogo 'lake')
+# Inicialización DuckDB + DuckLake
 # ===============================================================
 def init_duckdb(aws_conn, pg_conn):
     con = duckdb.connect(database=":memory:")
@@ -54,16 +54,16 @@ def get_2023_full_year_paths():
     ]
 
 @dag(
-    dag_id="mobility_BATCH_FULL_YEAR_2023",
+    dag_id="mobility_BATCH_FULL_YEAR_2023_v2",
     start_date=datetime(2025, 1, 1),
     schedule=None,
     catchup=False,
-    tags=["bronze", "silver", "aws_batch", "idempotent"]
+    tags=["bronze", "silver", "aws_batch", "airflow_3"]
 )
 def mobility_ingestion():
 
     # ===========================================================
-    # 1. BRONZE LOCAL: FUENTES OFICIALES (CTAS Idempotente)
+    # 1. BRONZE LOCAL: CONFIGURACIÓN INICIAL
     # ===========================================================
 
     @task
@@ -71,11 +71,9 @@ def mobility_ingestion():
         aws_conn = BaseHook.get_connection("aws_s3_conn")
         pg_conn = BaseHook.get_connection("my_postgres_conn")
         con = init_duckdb(aws_conn, pg_conn)
-        
         con.execute(f"ATTACH 'ducklake:secreto_ducklake' AS lake (DATA_PATH 's3://pruebas-airflow-carlos/', OVERRIDE_DATA_PATH TRUE);")
         con.execute("CREATE SCHEMA IF NOT EXISTS lake.bronze;")
 
-        # Renta oficial (INE) - all_varchar=True para evitar errores de tipo
         con.execute("""
             CREATE OR REPLACE TABLE lake.bronze.renta AS 
             SELECT * FROM read_csv_auto(
@@ -86,7 +84,6 @@ def mobility_ingestion():
             );
         """)
 
-        # Población oficial (MITMA)
         con.execute("""
             CREATE OR REPLACE TABLE lake.bronze.poblacion AS 
             SELECT * FROM read_csv_auto(
@@ -97,7 +94,6 @@ def mobility_ingestion():
             );
         """)
 
-        # Geometría (MITMA)
         con.execute("""
             CREATE OR REPLACE TABLE lake.bronze.geo_municipios AS 
             SELECT * FROM ST_Read(
@@ -105,7 +101,6 @@ def mobility_ingestion():
             );
         """)
 
-        # Relaciones (MITMA)
         con.execute("""
             CREATE OR REPLACE TABLE lake.bronze.relaciones AS 
             SELECT * FROM read_csv_auto(
@@ -124,7 +119,6 @@ def mobility_ingestion():
         con = init_duckdb(aws_conn, pg_conn)
         con.execute(f"ATTACH 'ducklake:secreto_ducklake' AS lake (DATA_PATH 's3://pruebas-airflow-carlos/', OVERRIDE_DATA_PATH TRUE);")
         
-        # Esto hace el DAG IDEMPOTENTE: Borra y crea la tabla vacía antes de cargar
         con.execute("""
             CREATE OR REPLACE TABLE lake.bronze.trips_municipios_2023 AS 
             SELECT * FROM read_csv_auto(
@@ -135,38 +129,39 @@ def mobility_ingestion():
         con.close()
 
     # ===========================================================
-    # 2. BRONZE BATCH: CARGA MASIVA (Uso de 'all_varchar')
-    # ===========================================================
-
-    batch_overrides = [
-        {
-            "containerOverrides": {
-                "environment": [
-                    {
-                        "name": "SQL_QUERY", 
-                        "value": f"INSERT INTO lake.bronze.trips_municipios_2023 SELECT * FROM read_csv('{fp}', header=true, auto_detect=true, all_varchar=true);"
-                    },
-                    {"name": "memory", "value": "2GB"}
-                ]
-            }
-        }
-        for fp in get_2023_full_year_paths()
-    ]
-
-    load_viajes_batch = BatchOperator.partial(
-        task_id         = "load_viajes_batch",
-        job_name        = "ingest_trip_day",
-        job_queue       = "DuckJobQueue",
-        job_definition  = "EC2JobDefinition:2", 
-        region_name     = "eu-central-1"
-    ).expand(overrides=batch_overrides)
-
-    # ===========================================================
-    # 3. SILVER: TRANSFORMACIÓN DEFINITIVA
+    # 2. BRONZE BATCH: ENVÍO DE TRABAJOS (Solución al TypeError)
     # ===========================================================
 
     @task
-    def create_silver_layer():
+    def submit_batch_job(file_path: str):
+        # Usamos el Hook para saltarnos la validación estricta de BatchOperator.expand()
+        hook = BatchHook(region_name="eu-central-1")
+        
+        sql = f"INSERT INTO lake.bronze.trips_municipios_2023 SELECT * FROM read_csv('{file_path}', header=true, auto_detect=true, all_varchar=true);"
+        
+        # Enviamos el trabajo directamente a AWS
+        response = hook.submit_job(
+            job_name       = "ingest_trip_day",
+            job_queue      = "DuckJobQueue",
+            job_definition = "EC2JobDefinition:2",
+            containerOverrides = {
+                "environment": [
+                    {"name": "SQL_QUERY", "value": sql},
+                    {"name": "memory",    "value": "2GB"}
+                ]
+            }
+        )
+        return response['jobId']
+
+    # Lanzamos los 365 trabajos en paralelo (AWS Batch los gestionará)
+    batch_jobs = submit_batch_job.expand(file_path=get_2023_full_year_paths())
+
+    # ===========================================================
+    # 3. SILVER: TRANSFORMACIÓN FINAL
+    # ===========================================================
+
+    @task
+    def create_silver_layer(wait_for_batch):
         aws_conn = BaseHook.get_connection("aws_s3_conn")
         pg_conn = BaseHook.get_connection("my_postgres_conn")
         con = init_duckdb(aws_conn, pg_conn)
@@ -174,7 +169,7 @@ def mobility_ingestion():
         con.execute("CREATE SCHEMA IF NOT EXISTS lake.silver;")
         con.execute("USE lake;")
 
-        # Silver Población (Aquí ya convertimos a INTEGER con CAST)
+        # Silver Población
         con.execute("""
             CREATE OR REPLACE TABLE silver.poblacion AS 
             SELECT 
@@ -195,7 +190,7 @@ def mobility_ingestion():
               AND TRY_CAST(REPLACE("Renta neta media por persona", '.', '') AS INTEGER) IS NOT NULL;
         """)
 
-        # Silver Lugares (Transformación para Gold)
+        # Silver Lugares
         con.execute("""
             CREATE OR REPLACE TABLE silver.lugares AS
             SELECT 
@@ -210,7 +205,7 @@ def mobility_ingestion():
             JOIN bronze.geo_municipios g ON TRIM(r.municipio_mitma) = TRIM(g.ID);
         """)
 
-        # Silver Viajes (Cruce Final)
+        # Silver Viajes
         con.execute("""
             CREATE OR REPLACE TABLE silver.viajes AS
             SELECT 
@@ -227,10 +222,12 @@ def mobility_ingestion():
         con.close()
 
     # Orquestación
-    bronze_init = ingest_bronze_official_data()
+    bronze_init  = ingest_bronze_official_data()
     v_table_init = create_viajes_bronze_table_init()
-    silver_proc = create_silver_layer()
+    
+    # El paso de Silver espera a que terminen los 365 trabajos de Batch
+    silver_proc = create_silver_layer(wait_for_batch=batch_jobs)
 
-    bronze_init >> v_table_init >> load_viajes_batch >> silver_proc
+    bronze_init >> v_table_init >> batch_jobs >> silver_proc
 
 mobility_dag = mobility_ingestion()
