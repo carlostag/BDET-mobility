@@ -68,12 +68,12 @@ def get_con_and_attach():
     con = init_duckdb(aws_conn, pg_conn)
 
     con.execute("""
-        ATTACH 'ducklake:secreto_ducklake' AS movilidad (
+        ATTACH 'ducklake:secreto_ducklake' AS lake (
             DATA_PATH 's3://pruebas-airflow-carlos/',
             OVERRIDE_DATA_PATH TRUE
         );
     """)
-    con.execute("USE movilidad;")
+    con.execute("USE lake;")
 
     return con
 
@@ -108,7 +108,7 @@ def gold_analytics_poligono():
             CREATE TABLE gold.infrastructure_mismatch AS
             WITH municipios_en_poligono AS (
                 SELECT id
-                FROM movilidad.silver.lugares
+                FROM lake.silver.lugares
                 WHERE ST_Contains(
                     ST_GeomFromText('{polygon_wkt}'),
                     coordenadas
@@ -121,7 +121,7 @@ def gold_analytics_poligono():
                     id_destino,
                     SUM(viajes) AS trips,
                     AVG(viajes_metros) AS dist
-                FROM movilidad.silver.viajes
+                FROM lake.silver.viajes
                 WHERE id_origen IN (SELECT id FROM municipios_en_poligono)
                 OR id_destino IN (SELECT id FROM municipios_en_poligono)
                 GROUP BY id_origen, id_destino
@@ -160,8 +160,8 @@ def gold_analytics_poligono():
                 res.trips        AS viajes_reales,
                 res.mismatch_ratio
             FROM results res
-            LEFT JOIN movilidad.silver.lugares lo ON res.id_origen  = lo.id
-            LEFT JOIN movilidad.silver.lugares ld ON res.id_destino = ld.id;
+            LEFT JOIN lake.silver.lugares lo ON res.id_origen  = lo.id
+            LEFT JOIN lake.silver.lugares ld ON res.id_destino = ld.id;
 
         """)
 
@@ -248,4 +248,5 @@ def gold_analytics_poligono():
 
 
 dag = gold_analytics_poligono()
+
 
