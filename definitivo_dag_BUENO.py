@@ -5,36 +5,27 @@ from pendulum import datetime
 import duckdb
 
 # ===============================================================
-# 1. CONFIGURACIÓN Y UTILIDADES
+# 1. UTILIDADES
 # ===============================================================
 
 def init_duckdb(aws_conn, pg_conn):
-	"""Inicializa DuckDB local con las extensiones y secretos necesarios."""
+	"""Inicializa DuckDB para las tareas locales (Bronze oficial y Silver)."""
 	con = duckdb.connect(database=":memory:")
 	con.execute("INSTALL ducklake; INSTALL postgres; INSTALL spatial; INSTALL httpfs;")
 	con.execute("LOAD ducklake; LOAD spatial; LOAD postgres; LOAD httpfs;")
-	con.execute(f"""
-		SET s3_region           = 'eu-central-1'; 
-		SET s3_access_key_id     = '{aws_conn.login}'; 
-		SET s3_secret_access_key = '{aws_conn.password}';
-	""")
-	con.execute(f"""
-		CREATE OR REPLACE SECRET secreto_postgres (
-			TYPE POSTGRES, HOST '{pg_conn.host}', PORT {pg_conn.port}, 
-			DATABASE '{pg_conn.schema}', USER '{pg_conn.login}', PASSWORD '{pg_conn.password}'
-		);
-	""")
+	con.execute(f"SET s3_region='eu-central-1'; SET s3_access_key_id='{aws_conn.login}'; SET s3_secret_access_key='{aws_conn.password}';")
+	con.execute(f"CREATE OR REPLACE SECRET secreto_postgres (TYPE POSTGRES, HOST '{pg_conn.host}', PORT {pg_conn.port}, DATABASE '{pg_conn.schema}', USER '{pg_conn.login}', PASSWORD '{pg_conn.password}');")
 	con.execute("CREATE OR REPLACE SECRET secreto_ducklake (TYPE DUCKLAKE, METADATA_PATH '', METADATA_PARAMETERS MAP {'TYPE': 'postgres', 'SECRET': 'secreto_postgres'});")
 	return con
 
 def get_2023_week_paths():
-	"""Genera la lista de los primeros 7 días de enero de 2023."""
+	"""Genera rutas para los primeros 7 días de enero de 2023 para pruebas."""
 	base = "s3://dl-mobility-spain/audit/viajes/municipios/2023"
 	suffix = "Viajes_municipios"
 	return [f"{base}/01/202301{day:02d}_{suffix}.csv.gz" for day in range(1, 8)]
 
 # ===============================================================
-# 2. DEFINICIÓN DEL DAG
+# 2. DAG
 # ===============================================================
 
 @dag(
@@ -42,11 +33,10 @@ def get_2023_week_paths():
 	start_date=datetime(2025, 1, 1),
 	schedule=None,
 	catchup=False,
-	tags=["test", "duckrunner", "production_ready"]
+	tags=["test", "duckrunner", "memory_fix"]
 )
 def mobility_ingestion():
 
-	# --- BRONZE: Ingestión de Dimensiones (INE/MITMA) ---
 	@task
 	def ingest_bronze_official_data():
 		aws_conn = BaseHook.get_connection("aws_s3_conn")
@@ -54,14 +44,12 @@ def mobility_ingestion():
 		con = init_duckdb(aws_conn, pg_conn)
 		con.execute(f"ATTACH 'ducklake:secreto_ducklake' AS lake (DATA_PATH 's3://pruebas-airflow-carlos/', OVERRIDE_DATA_PATH TRUE);")
 		con.execute("CREATE SCHEMA IF NOT EXISTS lake.bronze;")
-		
 		con.execute("CREATE OR REPLACE TABLE lake.bronze.renta AS SELECT * FROM read_csv_auto('https://www.ine.es/jaxiT3/files/t/es/csv_bd/30824.csv?nocab=1', sep='\\t', header=true, all_varchar=true);")
 		con.execute("CREATE OR REPLACE TABLE lake.bronze.poblacion AS SELECT * FROM read_csv_auto('https://movilidad-opendata.mitma.es/zonificacion/zonificacion_municipios/poblacion_municipios.csv', sep='|', header=false, all_varchar=true);")
 		con.execute("CREATE OR REPLACE TABLE lake.bronze.geo_municipios AS SELECT * FROM ST_Read('https://movilidad-opendata.mitma.es/zonificacion/zonificacion_municipios/zonificacion_municipios.shp');")
 		con.execute("CREATE OR REPLACE TABLE lake.bronze.relaciones AS SELECT * FROM read_csv_auto('https://movilidad-opendata.mitma.es/zonificacion/relacion_ine_zonificacionMitma.csv', sep='|', header=true, all_varchar=true);")
 		con.close()
 
-	# --- BRONZE: Inicialización Tabla de Hechos ---
 	@task
 	def create_viajes_bronze_table_init():
 		aws_conn = BaseHook.get_connection("aws_s3_conn")
@@ -71,7 +59,7 @@ def mobility_ingestion():
 		con.execute("CREATE OR REPLACE TABLE lake.bronze.trips_municipios_2023 AS SELECT * FROM read_csv_auto('s3://dl-mobility-spain/audit/viajes/municipios/2023/01/20230101_Viajes_municipios.csv.gz', all_varchar=true) LIMIT 0;")
 		con.close()
 
-	# --- BRONZE: Carga Batch (Inyección Exhaustiva de Variables) ---
+	# --- CONFIGURACIÓN BATCH (EXTRACCIÓN DE CREDENCIALES) ---
 	aws_conn = BaseHook.get_connection("aws_s3_conn")
 	pg_conn = BaseHook.get_connection("my_postgres_conn")
 
@@ -80,33 +68,27 @@ def mobility_ingestion():
 	batch_overrides_list = [
 		{
 			"environment": [
-				# --- POSTGRES (Todas las variantes posibles) ---
+				# --- EL FIX DE MEMORIA ---
+				{"name": "memory", "value": "2GB"},
+				
+				# --- POSTGRES (COBERTURA TOTAL) ---
 				{"name": "HOST_POSTGRES",      "value": pg_conn.host},
-				{"name": "IP_POSTGRES",        "value": pg_conn.host},
 				{"name": "PUERTO_POSTGRES",    "value": str(pg_conn.port)},
 				{"name": "PORT_POSTGRES",      "value": str(pg_conn.port)},
 				{"name": "USUARIO_POSTGRES",   "value": pg_conn.login},
 				{"name": "USER_POSTGRES",      "value": pg_conn.login},
 				{"name": "PASS_POSTGRES",      "value": pg_conn.password},
 				{"name": "PASSWORD_POSTGRES",  "value": pg_conn.password},
-				{"name": "CLAVE_POSTGRES",     "value": pg_conn.password},
-				{"name": "CONTRA_POSTGRES",    "value": pg_conn.password},
 				{"name": "DB_POSTGRES",        "value": pg_conn.schema},
 				{"name": "DATABASE_POSTGRES",  "value": pg_conn.schema},
-				{"name": "BASE_DATOS_POSTGRES","value": pg_conn.schema},
-				{"name": "ESQUEMA_POSTGRES",   "value": "public"},
-				{"name": "SCHEMA_POSTGRES",    "value": "public"},
 				
 				# --- AWS / S3 ---
 				{"name": "AWS_ACCESS_KEY_ID",     "value": aws_conn.login},
 				{"name": "AWS_SECRET_ACCESS_KEY", "value": aws_conn.password},
 				{"name": "AWS_REGION",            "value": "eu-central-1"},
-				{"name": "REGION_AWS",            "value": "eu-central-1"},
 				{"name": "DATA_PATH",             "value": "s3://pruebas-airflow-carlos/"},
-				{"name": "S3_PATH",               "value": "s3://pruebas-airflow-carlos/"},
-				{"name": "BUCKET_S3",             "value": "pruebas-airflow-carlos"},
 				
-				# --- EJECUCIÓN ---
+				# --- SQL QUERY ---
 				{
 					"name": "SQL_QUERY", 
 					"value": f"INSERT INTO lake.bronze.trips_municipios_2023 SELECT * FROM read_csv('{fp}', header=true, auto_detect=true, all_varchar=true);"
@@ -124,7 +106,6 @@ def mobility_ingestion():
 		region_name     = "eu-central-1"
 	).expand(container_overrides=batch_overrides_list)
 
-	# --- SILVER: Transformación con Tabs Limpios ---
 	@task
 	def create_silver_layer():
 		aws_conn = BaseHook.get_connection("aws_s3_conn")
@@ -133,7 +114,7 @@ def mobility_ingestion():
 		con.execute(f"ATTACH 'ducklake:secreto_ducklake' AS lake (DATA_PATH 's3://pruebas-airflow-carlos/', OVERRIDE_DATA_PATH TRUE);")
 		con.execute("CREATE SCHEMA IF NOT EXISTS lake.silver; USE lake;")
 
-		# Transformación Silver Población
+		# Silver Población
 		con.execute("""
 			CREATE OR REPLACE TABLE silver.poblacion AS 
 			SELECT 
@@ -143,7 +124,7 @@ def mobility_ingestion():
 			WHERE TRY_CAST(REPLACE(column1, ',', '') AS INTEGER) IS NOT NULL;
 		""")
 
-		# Transformación Silver Renta
+		# Silver Renta
 		con.execute("""
 			CREATE OR REPLACE TABLE silver.renta AS 
 			SELECT 
@@ -153,7 +134,7 @@ def mobility_ingestion():
 			WHERE Periodo = '2023';
 		""")
 
-		# Transformación Silver Lugares (Dimensiones Espaciales)
+		# Silver Lugares
 		con.execute("""
 			CREATE OR REPLACE TABLE silver.lugares AS 
 			SELECT 
@@ -169,7 +150,7 @@ def mobility_ingestion():
 				ON TRIM(r.municipio_mitma) = TRIM(g.ID);
 		""")
 
-		# Transformación Silver Viajes (Hechos transformados)
+		# Silver Viajes
 		con.execute("""
 			CREATE OR REPLACE TABLE silver.viajes AS 
 			SELECT 
@@ -184,7 +165,6 @@ def mobility_ingestion():
 		""")
 		con.close()
 
-	# --- FLUJO DE TRABAJO ---
 	[ingest_bronze_official_data(), create_viajes_bronze_table_init()] >> load_viajes_batch >> create_silver_layer()
 
 mobility_dag = mobility_ingestion()
