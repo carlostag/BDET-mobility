@@ -83,7 +83,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -112,7 +112,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -133,7 +133,7 @@ def mobility_bronze_silver():
     # -------------------- DISTRITOS --------------------
     create_distritos = create_bronze_table(
         table_name="trips_distritos_2023",
-        sample_file="s3://bd-mobility/prebronze/viajes/distritos/2023/01/20230101_Viajes_distritos.csv.gz"
+        sample_file="s3://dl-mobility-spain/audit/viajes/distritos/2023/01/20230101_Viajes_distritos.csv.gz"
     )
 
     with TaskGroup(group_id="insert_distritos") as insert_distritos:
@@ -141,7 +141,7 @@ def mobility_bronze_silver():
             table_name="trips_distritos_2023"
         ).expand(
             file_path=january_first_10_files(
-                "s3://bd-mobility/prebronze/viajes/distritos/2023/01",
+                "s3://dl-mobility-spain/audit/viajes/distritos/2023/01",
                 "Viajes_distritos"
             )
         )
@@ -151,7 +151,7 @@ def mobility_bronze_silver():
     # -------------------- MUNICIPIOS --------------------
     create_municipios = create_bronze_table(
         table_name="trips_municipios_2023",
-        sample_file="s3://bd-mobility/prebronze/viajes/municipios/2023/01/20230101_Viajes_municipios.csv.gz"
+        sample_file="s3://dl-mobility-spain/audit/viajes/municipios/2023/01/20230101_Viajes_municipios.csv.gz"
     )
 
     with TaskGroup(group_id="insert_municipios") as insert_municipios:
@@ -159,7 +159,7 @@ def mobility_bronze_silver():
             table_name="trips_municipios_2023"
         ).expand(
             file_path=january_first_10_files(
-                "s3://bd-mobility/prebronze/viajes/municipios/2023/01",
+                "s3://dl-mobility-spain/audit/viajes/municipios/2023/01",
                 "Viajes_municipios"
             )
         )
@@ -169,7 +169,7 @@ def mobility_bronze_silver():
     # -------------------- GAUS --------------------
     create_gaus = create_bronze_table(
         table_name="trips_gaus_2023",
-        sample_file="s3://bd-mobility/prebronze/viajes/gaus/2023/01/20230101_Viajes_GAU.csv.gz"
+        sample_file="s3://dl-mobility-spain/audit/viajes/gaus/2023/01/20230101_Viajes_GAU.csv.gz"
     )
 
     with TaskGroup(group_id="insert_gaus") as insert_gaus:
@@ -177,7 +177,7 @@ def mobility_bronze_silver():
             table_name="trips_gaus_2023"
         ).expand(
             file_path=january_first_10_files(
-                "s3://bd-mobility/prebronze/viajes/gaus/2023/01",
+                "s3://dl-mobility-spain/audit/viajes/gaus/2023/01",
                 "Viajes_GAU"
             )
         )
@@ -202,7 +202,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -213,7 +213,7 @@ def mobility_bronze_silver():
             CREATE OR REPLACE TABLE bronze.renta AS
             SELECT *
             FROM read_csv(
-                's3://bd-mobility/prebronze/renta/2023/renta.csv',
+                's3://dl-mobility-spain/audit/renta/2023/renta.csv',
                 HEADER = true,
                 AUTO_DETECT = true
             );
@@ -230,7 +230,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -241,7 +241,7 @@ def mobility_bronze_silver():
             CREATE OR REPLACE TABLE bronze.poblacion AS
             SELECT *
             FROM read_csv(
-                's3://bd-mobility/prebronze/poblacion/2023/poblacion.csv',
+                's3://dl-mobility-spain/audit/poblacion/2023/poblacion.csv',
                 HEADER = true,
                 AUTO_DETECT = true
             );
@@ -258,7 +258,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -269,7 +269,7 @@ def mobility_bronze_silver():
             CREATE OR REPLACE TABLE bronze.relaciones AS
             SELECT *
             FROM read_csv(
-                's3://bd-mobility/prebronze/relacion/relaciones_municipio_mitma.csv',
+                's3://dl-mobility-spain/audit/relacion/relaciones_municipio_mitma.csv',
                 HEADER = true,
                 AUTO_DETECT = true
             );
@@ -286,7 +286,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -309,7 +309,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -318,7 +318,7 @@ def mobility_bronze_silver():
         con.execute("""
             CREATE OR REPLACE TABLE bronze.provincias AS
             SELECT *
-            FROM ST_Read('s3://bd-mobility/prebronze/geo/provincias/provincias.geojson');
+            FROM ST_Read('s3://dl-mobility-spain/audit/geo/provincias/provincias.geojson');
         """)
 
         con.close()
@@ -332,7 +332,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -342,7 +342,7 @@ def mobility_bronze_silver():
             CREATE OR REPLACE TABLE bronze.calendario AS
             SELECT *
             FROM read_csv(
-                's3://bd-mobility/prebronze/calendario/2023/calendario (1).csv',
+                's3://dl-mobility-spain/audit/calendario/2023/calendario (1).csv',
                 HEADER = true,
                 AUTO_DETECT = true
             );
@@ -362,15 +362,15 @@ def mobility_bronze_silver():
 
     geo_municipios = load_geo_table(
         table_name="geo_municipios",
-        geojson_path="s3://bd-mobility/prebronze/geo/municipios/municipios.geojson"
+        geojson_path="s3://dl-mobility-spain/audit/geo/municipios/municipios.geojson"
     )
     #geo_distritos = load_geo_table(
     #    table_name="geo_distritos",
-    #    geojson_path="s3://bd-mobility/prebronze/geo/distritos/distritos.geojson"
+    #    geojson_path="s3://dl-mobility-spain/audit/geo/distritos/distritos.geojson"
     #)
     #geo_gaus = load_geo_table(
     #    table_name="geo_gaus",
-     #   geojson_path="s3://bd-mobility/prebronze/geo/gaus/gaus.geojson"
+     #   geojson_path="s3://dl-mobility-spain/audit/geo/gaus/gaus.geojson"
     #)
 
     provincias = load_provincias()
@@ -400,7 +400,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -428,7 +428,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -463,7 +463,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -498,7 +498,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -526,7 +526,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -572,7 +572,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -599,7 +599,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -643,7 +643,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -672,7 +672,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -705,7 +705,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -737,7 +737,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -803,7 +803,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -837,7 +837,7 @@ def mobility_bronze_silver():
 
         con.execute("""
             ATTACH 'ducklake:secreto_ducklake' AS movilidad (
-                DATA_PATH 's3://pruebas-airflow-julia/',
+                DATA_PATH 's3://pruebas-airflow-carlos/',
                 OVERRIDE_DATA_PATH TRUE
             );
         """)
@@ -896,3 +896,4 @@ def mobility_bronze_silver():
 
 
 dag = mobility_bronze_silver()
+
