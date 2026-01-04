@@ -1,6 +1,5 @@
-from airflow.decorators import dag, task
-from airflow.models.param import Param
-from airflow.hooks.base import BaseHook
+from airflow.sdk import dag, task, Param
+from airflow.sdk.bases.hook import BaseHook
 from pendulum import datetime
 import duckdb
 import os
@@ -12,17 +11,12 @@ import boto3
 # ============================================================
 
 def init_duckdb(aws_conn, pg_conn):
-    """Inicializa DuckDB con las extensiones y secretos necesarios."""
-    # Necesario para conexiones SSL como Neon
     os.environ["PGSSLMODE"] = "require"
-
     con = duckdb.connect(database=":memory:")
 
-    # Optimización para lecturas en S3
     con.execute("SET ducklake_max_retry_count = 100;")
     con.execute("SET max_memory='2GB';")
 
-    # Instalación de extensiones
     con.execute("""
         INSTALL ducklake;
         INSTALL postgres;
@@ -34,7 +28,6 @@ def init_duckdb(aws_conn, pg_conn):
         LOAD spatial;
     """)
 
-    # Credenciales S3 desde la conexión de Airflow
     con.execute(f"""
         SET s3_region='{aws_conn.extra_dejson.get("region", "eu-central-1")}';
         SET s3_access_key_id='{aws_conn.login}';
@@ -43,7 +36,6 @@ def init_duckdb(aws_conn, pg_conn):
 
     db_name = pg_conn.schema or "neondb"
 
-    # Secreto Postgres para el catálogo de DuckLake
     con.execute(f"""
         CREATE OR REPLACE SECRET secreto_postgres (
             TYPE postgres,
@@ -55,7 +47,6 @@ def init_duckdb(aws_conn, pg_conn):
         );
     """)
 
-    # Secreto DuckLake
     con.execute("""
         CREATE OR REPLACE SECRET secreto_ducklake (
             TYPE ducklake,
@@ -66,18 +57,13 @@ def init_duckdb(aws_conn, pg_conn):
             }
         );
     """)
-
     return con
 
-
 def get_con_and_attach():
-    """Obtiene conexiones de Airflow y conecta el bucket s3."""
     aws_conn = BaseHook.get_connection("aws_s3_conn")
-    pg_conn = BaseHook.get_connection("my_postgres_conn") # Ajustado a tu última petición
-
+    pg_conn = BaseHook.get_connection("my_postgres_conn")
     con = init_duckdb(aws_conn, pg_conn)
 
-    # Conexión al bucket pruebas-airflow-carlos2
     con.execute("""
         ATTACH 'ducklake:secreto_ducklake' AS lake (
             DATA_PATH 's3://pruebas-airflow-carlos2/',
@@ -85,9 +71,7 @@ def get_con_and_attach():
         );
     """)
     con.execute("USE lake;")
-
     return con
-
 
 # ============================================================
 # DEFINICIÓN DEL DAG
@@ -99,53 +83,43 @@ def get_con_and_attach():
     schedule=None,
     catchup=False,
     tags=["gold", "spatial", "manual_input"],
-    # Formulario dinámico para el polígono
     params={
         "polygon": Param(
-            default="POLYGON ((-1.494141 39.850721, -1.538086 39.164141, -0.230713 39.164141, -0.263672 39.951859, -1.494141 39.850721))",
+            "POLYGON ((-1.494141 39.850721, -1.538086 39.164141, -0.230713 39.164141, -0.263672 39.951859, -1.494141 39.850721))",
             type="string",
-            title="Polígono de estudio (WKT)",
-            description="Pega aquí el WKT del polígono para filtrar los datos."
+            title="Polígono de estudio (WKT)"
         )
     }
 )
 def gold_analytics_dag():
 
-    # --------------------------------------------------------
-    # 0. INSPECCIÓN: Ver esquema en Logs de Airflow
-    # --------------------------------------------------------
     @task
     def inspect_schema():
         con = get_con_and_attach()
-        print("--- [LOG] ESQUEMAS ---")
-        print(con.execute("SELECT schema_name FROM information_schema.schemata;").df())
-        print("\n--- [LOG] TABLAS EN SILVER ---")
+        print("--- [LOG] TABLAS EN SILVER ---")
         print(con.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'silver';").df())
-        print("\n--- [LOG] COLUMNAS LUGARES ---")
+        print("\n--- [LOG] COLUMNAS DE LOCATIONS ---")
+        # Corregido: Ahora apunta a 'locations' en lugar de 'lugares'
         try:
-            print(con.execute("DESCRIBE silver.lugares;").df())
+            print(con.execute("DESCRIBE silver.locations;").df())
         except Exception as e:
-            print(f"No se pudo describir la tabla: {e}")
+            print(f"Error al describir tabla: {e}")
         con.close()
 
-    # --------------------------------------------------------
-    # 1. COMPUTE: Cálculo de mismatch espacial
-    # --------------------------------------------------------
     @task
     def compute_mismatch(**context):
-        # Toma el polígono introducido manualmente en la UI
         polygon_wkt = context["params"]["polygon"]
-        
         con = get_con_and_attach()
+
         con.execute("CREATE SCHEMA IF NOT EXISTS gold;")
         con.execute("DROP TABLE IF EXISTS gold.infrastructure_mismatch;")
 
-        # Lógica de negocio sobre el bucket pruebas-airflow-carlos2
+        # Corregido: Cambio de 'lugares' a 'locations' en los JOIN y subconsultas
         con.execute(f"""
             CREATE TABLE gold.infrastructure_mismatch AS
             WITH municipios_en_poligono AS (
                 SELECT id
-                FROM lake.silver.lugares
+                FROM lake.silver.locations
                 WHERE ST_Contains(
                     ST_GeomFromText('{polygon_wkt}'),
                     coordenadas
@@ -185,20 +159,16 @@ def gold_analytics_dag():
                 ld.nombre AS municipio_destino, ld.coordenadas AS geom_destino,
                 res.trips AS viajes_reales, res.mismatch_ratio
             FROM results res
-            LEFT JOIN lake.silver.lugares lo ON res.id_origen  = lo.id
-            LEFT JOIN lake.silver.lugares ld ON res.id_destino = ld.id;
+            LEFT JOIN lake.silver.locations lo ON res.id_origen  = lo.id
+            LEFT JOIN lake.silver.locations ld ON res.id_destino = ld.id;
         """)
         con.close()
 
-    # --------------------------------------------------------
-    # 2. MAP: Generar Folium y subir a S3
-    # --------------------------------------------------------
     @task
     def generate_map(**context):
         run_id = context["run_id"]
         con = get_con_and_attach()
 
-        # Extraer datos procesados
         df = con.execute("""
             SELECT
                 municipio_origen,
@@ -211,26 +181,21 @@ def gold_analytics_dag():
         """).df()
         con.close()
 
-        # Crear Mapa
         m = folium.Map(location=[40.4, -3.7], zoom_start=6, tiles="cartodbpositron")
         all_coords = []
-
         for _, row in df.iterrows():
             start, end = [row.lat_o, row.lon_o], [row.lat_d, row.lon_d]
             all_coords.extend([start, end])
             color = "red" if row.mismatch_ratio < 0.1 else "orange"
-            
             folium.PolyLine(
                 [start, end], color=color, weight=(row.viajes_reales/20000)+2, opacity=0.6,
                 tooltip=f"Origen: {row.municipio_origen}<br>Ratio: {round(row.mismatch_ratio, 3)}"
             ).add_to(m)
 
         if all_coords: m.fit_bounds(all_coords)
-
         local_path = f"/tmp/map_{run_id}.html"
         m.save(local_path)
 
-        # Subida a S3 (Bucket carlos2)
         aws_conn = BaseHook.get_connection("aws_s3_conn")
         s3 = boto3.client(
             "s3",
@@ -241,8 +206,6 @@ def gold_analytics_dag():
         s3.upload_file(local_path, "pruebas-airflow-carlos2", f"gold/report/mismatch_map_{run_id}.html")
         os.remove(local_path)
 
-    # Definición de dependencias
     inspect_schema() >> compute_mismatch() >> generate_map()
 
-# Instanciar el DAG
 gold_dag = gold_analytics_dag()
