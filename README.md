@@ -17,20 +17,7 @@ This document serves as a record of the technical decisions made during the deve
 ## Steps Followed
 
 ### 1. Data Acquisition
-**Challenge:** We initially located the data on the [MITMA Open Data portal](https://www.transportes.gob.es/ministerio/proyectos-singulares/estudios-de-movilidad-con-big-data/opendata-movilidad). However, manually downloading every monthly dataset was infeasible due to physical storage constraints and download times (approx. 5GB per file).
-
-**Solution:** We utilized the `pyspainmobility` Python package provided by the ministry to streamline extraction.
-
-**Library Configuration Used:**
-* `version` (int): Data version (Default: 2). Version 1 covers 2020-2021; Version 2 covers 2022 onwards.
-* `zones` (str): Geographic granularity. Options: `districts`, `municipalities` (default), `large_urban_areas` (GAU).
-* `start_date` (str): Required format `YYYY-MM-DD`.
-
-### 2. Data Exploration
-**Strategy:** We analyzed the official [examples folder](https://github.com/pyspainmobility/pySpainMobility/tree/main/examples) from the repository. Specifically, we adapted the logic from `examples/01-madrid.ipynb` to apply it to the **Valencia** region.
-
-**Initial Finding:**
-* The calculated mean distance of population mobility in the sample period is **70.09 km**.
+We used the data located the data on the [MITMA Open Data portal](https://www.transportes.gob.es/ministerio/proyectos-singulares/estudios-de-movilidad-con-big-data/opendata-movilidad) paired with some data from the INE.
 
 ---
 
