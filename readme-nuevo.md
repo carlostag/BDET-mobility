@@ -33,8 +33,7 @@ The pipeline transforms raw, heterogeneous data into actionable business intelli
 
 ### 3. Gold Layer: Advanced Analytics
 * **Clustering Analysis (BQ1):** Unsupervised K-Means clustering is applied to hourly mobility vectors to categorize days based on their movement profiles.
-* **Infrastructure Coverage (BQ2):** Identification of disconnected regions by comparing observed trip volumes against a theoretical **Gravity Model**:
-  $$Potencial = \frac{Poblacion_{origen} \times Renta_{destino}}{Distancia^2}$$.
+* **Infrastructure Coverage (BQ2):** Identification of disconnected regions by comparing observed trip volumes against a theoretical **Gravity Model**.
 * **Industrial Hub Identification (BQ3):** Algorithmic detection of industrial centers based on the statistical ratio of workday-to-weekend mobility volume.
 
 ---
