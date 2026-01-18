@@ -53,5 +53,5 @@ The pipeline transforms raw, heterogeneous data into actionable business intelli
 
 For detailed technical specifications regarding table structures, record counts, and column definitions, please consult the following external resources:
 
-* [cite_start]**Data Inventory & Dictionary:** Refer to the provided `datasheet.xlsx` for the complete catalog of Bronze, Silver, and Gold entities[cite: 1, 2].
-* **System Architecture:** Consult the **Project Diagram PDF** for a visual representation of the Airflow DAG workflows and the DuckLake storage logic.
+* **Data Inventory & Dictionary:** Refer to the provided `datasheet.xlsx` for the complete catalog of Bronze, Silver, and Gold entities.
+* **System Architecture:** Consult the **Project Diagram PDF** for a visual representation of the tables across different levels.
