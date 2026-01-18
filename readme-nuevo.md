@@ -6,7 +6,6 @@
 
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
 ![DuckDB](https://img.shields.io/badge/DuckDB-OLAP-yellow)
-![Airflow](https://img.scalable/badge/Orchestration-Apache_Airflow-red)
 ![DuckLake](https://img.shields.io/badge/Storage-DuckLake-green)
 
 ## Executive Summary
