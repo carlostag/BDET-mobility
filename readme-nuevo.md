@@ -41,7 +41,7 @@ The pipeline transforms raw, heterogeneous data into actionable business intelli
 
 * **Core Engine:** [DuckDB](https://duckdb.org/) for high-efficiency OLAP transformations.
 * **Orchestration:** [Apache Airflow](https://airflow.apache.org/) leveraging Dynamic Task Mapping for scalable file processing.
-* **Storage & Metadata:** **Amazon S3** for the data lake, with **PostgreSQL** managing the DuckLake metadata layer.
+* **Storage & Metadata:** **Amazon S3** for the data lake, with **Neon** managing the DuckLake metadata layer.
 * **Visualization & Reporting:**
     * **KeplerGL:** Generation of interactive geospatial flow maps.
     * **FPDF:** Automated generation of executive PDF reports.
